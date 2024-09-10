@@ -29,17 +29,18 @@ export default class GitLab {
     const options = GitLab.baseOptionsHttpReq();
 
     try {
-      const repositoryPath = `${encodeURIComponent(this.commonParams.owner)}/${encodeURIComponent(this.commonParams.repo)}`;
+      const repositoryPath = `${this.commonParams.owner}/${this.commonParams.repo}`;
       const response = await nodeFetch(
-        `${this.gitlabUrl}/projects/${repositoryPath}`,
+        `${this.gitlabUrl}/projects/${encodeURIComponent(repositoryPath)}`,
         options,
       );
+
       const res = await response.json();
 
       if (response.ok) {
-        this.projectId = res.data.id;
+        this.projectId = res.id;
       } else {
-        logger.error(`🤖 Error while obtaining projectId: ${res}`);
+        logger.error(`🤖 Error while obtaining projectId: ${JSON.strinfigy(res)}`);
         this.projectId = null;
       }
     } catch (error) {
@@ -82,8 +83,6 @@ export default class GitLab {
 
       return null;
     } catch (error) {
-      console.log('Failed to get labels: error');
-      console.log(error);
       logger.error(`🤖 Could get labels: ${error}`);
     }
   }
@@ -100,6 +99,10 @@ export default class GitLab {
 
       options.method = 'POST';
       options.body = JSON.stringify(label);
+      options.headers = {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      };
 
       const response = await nodeFetch(
         `${this.gitlabUrl}/projects/${this.projectId}/labels`,
@@ -111,7 +114,7 @@ export default class GitLab {
       if (response.ok) {
         logger.info(`🤖 New label created: ${res.name} , color: ${res.color}`);
       } else {
-        logger.error(`createLabel response: ${res}`);
+        logger.error(`createLabel response: ${JSON.stringify(res)}`);
       }
     } catch (error) {
       logger.error(`🤖 Failed to create label: ${error}`);
@@ -144,7 +147,7 @@ export default class GitLab {
         return res;
       }
 
-      logger.error(`createIssue response: ${res}`);
+      logger.error(`createIssue response: ${JSON.stringify(res)}`);
     } catch (error) {
       logger.error(`🤖 Could not create GitLab issue "${title}": ${error}`);
     }
@@ -156,6 +159,10 @@ export default class GitLab {
 
     options.method = 'PUT';
     options.body = JSON.stringify(newLabels);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
 
     try {
       const response = await nodeFetch(
@@ -168,7 +175,7 @@ export default class GitLab {
       if (response.ok) {
         logger.info(`🤖 Updated labels to GitLab issue #${issue.iid}`);
       } else {
-        logger.error(`setIssueLabels response: ${res}`);
+        logger.error(`setIssueLabels response: ${JSON.stringify(res)}`);
       }
     } catch (error) {
       logger.error(`🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`);
@@ -181,6 +188,10 @@ export default class GitLab {
 
     options.method = 'PUT';
     options.body = JSON.stringify(updateIssue);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
 
     try {
       const response = await nodeFetch(
@@ -192,7 +203,7 @@ export default class GitLab {
       if (response.ok) {
         logger.info(`🤖 Opened GitLab issue #${res.iid}`);
       } else {
-        logger.error(`openIssue response: ${res}`);
+        logger.error(`openIssue response: ${JSON.stringify(res)}`);
       }
     } catch (error) {
       logger.error(`🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`);
@@ -206,6 +217,10 @@ export default class GitLab {
 
     options.method = 'PUT';
     options.body = JSON.stringify(updateIssue);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
 
     try {
       const response = await nodeFetch(
@@ -217,7 +232,7 @@ export default class GitLab {
       if (response.ok) {
         logger.info(`🤖 Closed GitLab issue #${issue.iid}`);
       } else {
-        logger.error(`closeIssue response: ${res}`);
+        logger.error(`closeIssue response: ${JSON.stringify(res)}`);
       }
     } catch (error) {
       logger.error(`🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`);
@@ -239,7 +254,7 @@ export default class GitLab {
       const res = await response.json();
 
       if (response.ok) {
-        logger.debug(`response data: ${res}`);
+        logger.debug(`response data: ${JSON.stringify(res)}`);
         const issues = res;
 
         const [issue] = issues.filter(item => item.title === title); // since only one is expected, use the first one
@@ -247,7 +262,7 @@ export default class GitLab {
         return issue;
       }
 
-      logger.error(`openIssue response: ${res}`);
+      logger.error(`openIssue response: ${JSON.stringify(res)}`);
     } catch (error) {
       logger.error(`🤖 Could not find GitLab issue "${title}": ${error}`);
     }
@@ -260,6 +275,10 @@ export default class GitLab {
 
     options.method = 'POST';
     options.body = JSON.stringify(body);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
 
     try {
       const response = await nodeFetch(
@@ -274,7 +293,7 @@ export default class GitLab {
         return res.body;
       }
 
-      logger.error(`openIssue response: ${res}`);
+      logger.error(`openIssue response: ${JSON.stringify(res)}`);
     } catch (error) {
       logger.error(`🤖 Could not add comment to GitLab issue #${issue.iid} "${issue.title}": ${error}`);
     }
@@ -327,7 +346,7 @@ export default class GitLab {
     await this.addCommentToIssue({ issue, comment: description });
   }
 
-  static baseOptionsHttpReq() {
+  static baseOptionsHttpReq(token = process.env.OTA_ENGINE_GITLAB_TOKEN) {
     const options = {};
 
     if (process.env.HTTPS_PROXY) {
@@ -335,7 +354,8 @@ export default class GitLab {
     } else if (process.env.HTTP_PROXY) {
       options.agent = new HttpProxyAgent(process.env.HTTP_PROXY);
     }
-    options.headers = { Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}` };
+
+    options.headers = { Authorization: `Bearer ${token}` };
 
     return options;
   }

@@ -30,13 +30,18 @@ export default async function publishReleaseGitLab({
   const commonParams = { owner, repo };
 
   try {
-    const repositoryPath = `${encodeURIComponent(commonParams.owner)}/${encodeURIComponent(commonParams.repo)}`;
+    const repositoryPath = `${commonParams.owner}/${commonParams.repo}`;
 
-    const options = GitLab.baseOptionsHttpReq();
+    const options = GitLab.baseOptionsHttpReq(process.env.OTA_ENGINE_GITLAB_RELEASES_TOKEN);
 
     options.method = 'GET';
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
+
     const response = await nodeFetch(
-      `${gitlabAPIUrl}/projects/${repositoryPath}`,
+      `${gitlabAPIUrl}/projects/${encodeURIComponent(repositoryPath)}`,
       options,
     );
     const res = await response.json();
@@ -50,7 +55,7 @@ export default async function publishReleaseGitLab({
   const tagName = `${path.basename(archivePath, path.extname(archivePath))}`; // use archive filename as Git tag
 
   try {
-    let options = GitLab.baseOptionsHttpReq();
+    let options = GitLab.baseOptionsHttpReq(process.env.OTA_ENGINE_GITLAB_RELEASES_TOKEN);
 
     options.method = 'POST';
     options.body = {
@@ -59,13 +64,20 @@ export default async function publishReleaseGitLab({
       name: readme.title({ releaseDate }),
       description: readme.body(stats),
     };
-    const response = await nodeFetch(
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
+
+    options.body = JSON.stringify(options.body);
+
+    const releaseResponse = await nodeFetch(
       `${gitlabAPIUrl}/projects/${projectId}/releases`,
       options,
     );
-    const res = await response.json();
+    const releaseRes = await releaseResponse.json();
 
-    const releaseId = res.commit.id;
+    const releaseId = releaseRes.commit.id;
 
     logger.info(`Created release with releaseId: ${releaseId}`);
 
@@ -79,7 +91,7 @@ export default async function publishReleaseGitLab({
     );
     formData.append('file', fsApi.createReadStream(archivePath), { filename: path.basename(archivePath) });
 
-    options = GitLab.baseOptionsHttpReq();
+    options = GitLab.baseOptionsHttpReq(process.env.OTA_ENGINE_GITLAB_RELEASES_TOKEN);
     options.method = 'POST';
     options.headers = {
       ...formData.getHeaders(),
