@@ -1,12 +1,14 @@
 import { createRequire } from 'module';
 
+import HttpProxyAgent from 'http-proxy-agent';
+import HttpsProxyAgent from 'https-proxy-agent';
+import nodeFetch from 'node-fetch';
+
 import logger from '../logger/index.js';
 
 const require = createRequire(import.meta.url);
 
 export const MANAGED_BY_OTA_MARKER = '[managed by OTA]';
-
-const gitlabUrl = "https://gitlab.com/api/v4";
 
 export default class GitLab {
   static ISSUE_STATE_CLOSED = 'closed';
@@ -14,27 +16,33 @@ export default class GitLab {
   static ISSUE_STATE_ALL = 'all';
 
   constructor(repository) {
-    //const { version } = require('../../package.json');
-
-    const [owner, repo] = repository.split('/');
+    const [ owner, repo ] = repository.split('/');
 
     this.commonParams = { owner, repo };
+    this.projectId = null;
+    const gitlabUrl = process.env.OTA_ENGINE_GITLAB_API_BASE_URL;
+
+    this.gitlabUrl = gitlabUrl;
   }
 
   async initialize() {
-    const axios = require('axios');
+    const options = GitLab.baseOptionsHttpReq();
 
     try {
       const repositoryPath = `${this.commonParams.owner}/${this.commonParams.repo}`;
-      const response = await axios.get(
-        `${gitlabUrl}/projects/${encodeURIComponent(repositoryPath)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-          },
-        },
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${encodeURIComponent(repositoryPath)}`,
+        options,
       );
-      this.projectId = response.data.id;
+
+      const res = await response.json();
+
+      if (response.ok) {
+        this.projectId = res.id;
+      } else {
+        logger.error(`🤖 Error while obtaining projectId: ${JSON.strinfigy(res)}`);
+        this.projectId = null;
+      }
     } catch (error) {
       logger.error(`🤖 Error while obtaining projectId: ${error}`);
       this.projectId = null;
@@ -42,19 +50,15 @@ export default class GitLab {
     this.MANAGED_LABELS = require('./labels.json');
 
     const existingLabels = await this.getRepositoryLabels();
-    const existingLabelsNames = existingLabels.map((label) => label.name);
-    const missingLabels = this.MANAGED_LABELS.filter(
-      (label) => !existingLabelsNames.includes(label.name),
-    );
+    const existingLabelsNames = existingLabels.map(label => label.name);
+    const missingLabels = this.MANAGED_LABELS.filter(label => !existingLabelsNames.includes(label.name));
 
     if (missingLabels.length) {
-      logger.info(
-        `🤖 Following required labels are not present on the repository: ${missingLabels.map((label) => `"${label.name}"`).join(', ')}. Creating them…`,
-      );
+      logger.info(`🤖 Following required labels are not present on the repository: ${missingLabels.map(label => `"${label.name}"`).join(', ')}. Creating them…`);
 
       for (const label of missingLabels) {
-        await this.createLabel({
-          /* eslint-disable-line no-await-in-loop */ name: label.name,
+        await this.createLabel({ /* eslint-disable-line no-await-in-loop */
+          name: label.name,
           color: label.color,
           description: `${label.description} ${MANAGED_BY_OTA_MARKER}`,
         });
@@ -64,230 +68,251 @@ export default class GitLab {
 
   async getRepositoryLabels() {
     try {
-      const response = await fetch(
-        `${gitlabUrl}/projects/${this.projectId}/labels?with_counts=true`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-          },
-        },
+      const options = GitLab.baseOptionsHttpReq();
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${this.projectId}/labels?with_counts=true`,
+        options,
       );
-      if (response.status == 200) {
-        const labels = response.json();
-        return labels;
-      } else {
-        logger.error(
-          `🤖 Failed to get labels: ${response.status_code} - ${response.text}`,
-        );
-        return null;
+      const res = await response.json();
+
+      if (response.ok) {
+        return res;
       }
+
+      logger.error(`🤖 Failed to get labels: ${response.status} - ${JSON.stringify(res)}`);
+
+      return null;
     } catch (error) {
       logger.error(`🤖 Could get labels: ${error}`);
     }
   }
 
   async createLabel({ name, color, description }) {
-    const axios = require('axios');
-
     try {
       const label = {
-        name: name,
-        color: color,
-        description: description,
+        name,
+        color,
+        description,
       };
-      const response = await axios.post(
-        `${gitlabUrl}/projects/${this.projectId}/labels`,
-        label,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-        },
+
+      const options = GitLab.baseOptionsHttpReq();
+
+      options.method = 'POST';
+      options.body = JSON.stringify(label);
+      options.headers = {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      };
+
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${this.projectId}/labels`,
+        options,
       );
-      logger.info(`🤖 New label created: ${response.data.name}`);
+
+      const res = await response.json();
+
+      if (response.ok) {
+        logger.info(`🤖 New label created: ${res.name} , color: ${res.color}`);
+      } else {
+        logger.error(`createLabel response: ${JSON.stringify(res)}`);
+      }
     } catch (error) {
       logger.error(`🤖 Failed to create label: ${error}`);
     }
   }
 
   async createIssue({ title, description, labels }) {
-    const axios = require('axios');
-
     try {
       const issue = {
-        title: title,
-        labels: labels,
-        description: description,
+        title,
+        labels,
+        description,
       };
-      const response = await axios.post(
-        `${gitlabUrl}/projects/${this.projectId}/issues`,
-        issue,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-        },
-      );
-      logger.info(
-        `🤖 Created GitLab issue #${response.data.iid} "${title}": ${response.data.web_url}`,
+
+      const options = GitLab.baseOptionsHttpReq();
+
+      options.method = 'POST';
+      options.body = JSON.stringify(issue);
+
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${this.projectId}/issues`,
+        options,
       );
 
-      return response;
+      const res = await response.json();
+
+      if (response.ok) {
+        logger.info(`🤖 Created GitLab issue #${res.iid} "${title}": ${res.web_url}`);
+
+        return res;
+      }
+
+      logger.error(`createIssue response: ${JSON.stringify(res)}`);
     } catch (error) {
       logger.error(`🤖 Could not create GitLab issue "${title}": ${error}`);
     }
   }
 
   async setIssueLabels({ issue, labels }) {
-    const axios = require('axios');
+    const newLabels = { labels };
+    const options = GitLab.baseOptionsHttpReq();
+
+    options.method = 'PUT';
+    options.body = JSON.stringify(newLabels);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
 
     try {
-      const newLabels = {
-        labels: labels,
-      };
-      const response = await axios.put(
-        `${gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}`,
-        newLabels,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-        },
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}`,
+        options,
       );
 
-      logger.info(`🤖 Updated labels to GitLab issue #${issue.iid}`);
+      const res = await response.json();
+
+      if (response.ok) {
+        logger.info(`🤖 Updated labels to GitLab issue #${issue.iid}`);
+      } else {
+        logger.error(`setIssueLabels response: ${JSON.stringify(res)}`);
+      }
     } catch (error) {
-      logger.error(
-        `🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`,
-      );
+      logger.error(`🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`);
     }
   }
 
   async openIssue(issue) {
-    const axios = require('axios');
+    const updateIssue = { state_event: 'reopen' };
+    const options = GitLab.baseOptionsHttpReq();
+
+    options.method = 'PUT';
+    options.body = JSON.stringify(updateIssue);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
 
     try {
-      const updateIssue = {
-        state_event: 'reopen',
-      };
-      const response = await axios.put(
-        `${gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}`,
-        updateIssue,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-        },
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}`,
+        options,
       );
+      const res = await response.json();
 
-      logger.info(`🤖 Opened GitLab issue #${issue.iid}`);
+      if (response.ok) {
+        logger.info(`🤖 Opened GitLab issue #${res.iid}`);
+      } else {
+        logger.error(`openIssue response: ${JSON.stringify(res)}`);
+      }
     } catch (error) {
-      logger.error(
-        `🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`,
-      );
+      logger.error(`🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`);
     }
   }
 
   async closeIssue(issue) {
-    const axios = require('axios');
+    const updateIssue = { state_event: 'close' };
+
+    const options = GitLab.baseOptionsHttpReq();
+
+    options.method = 'PUT';
+    options.body = JSON.stringify(updateIssue);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    };
 
     try {
-      const updateIssue = {
-        state_event: 'close',
-      };
-      const response = await axios.put(
-        `${gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}`,
-        updateIssue,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-        },
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}`,
+        options,
       );
+      const res = await response.json();
 
-      logger.info(`🤖 Closed GitLab issue #${issue.iid}`);
+      if (response.ok) {
+        logger.info(`🤖 Closed GitLab issue #${issue.iid}`);
+      } else {
+        logger.error(`closeIssue response: ${JSON.stringify(res)}`);
+      }
     } catch (error) {
-      logger.error(
-        `🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`,
-      );
+      logger.error(`🤖 Could not update GitLab issue #${issue.iid} "${issue.title}": ${error}`);
     }
   }
 
   async getIssue({ title, ...searchParams }) {
-    const axios = require('axios');
-
     try {
-      let apiUrl = `${gitlabUrl}/projects/${this.projectId}/issues?state=${searchParams.state}&per_page=100`;
-      if (searchParams.state == 'all')
-        apiUrl = `${gitlabUrl}/projects/${this.projectId}/issues?per_page=100`;
-      apiUrl = `${gitlabUrl}/projects/${this.projectId}/issues?search=${encodeURIComponent(title)}&per_page=100`;
-      const response = await axios.get(apiUrl, {
-        headers: {
-          Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-        },
-      });
-      const issues = response.data;
+      let apiUrl = `${this.gitlabUrl}/projects/${this.projectId}/issues?state=${searchParams.state}&per_page=100`;
 
-      const [issue] = issues.filter((item) => item.title === title); // since only one is expected, use the first one
+      if (searchParams.state == 'all') apiUrl = `${this.gitlabUrl}/projects/${this.projectId}/issues?per_page=100`;
+      apiUrl = `${this.gitlabUrl}/projects/${this.projectId}/issues?search=${encodeURIComponent(title)}&per_page=100`;
 
-      setTimeout(() => {
-        console.log(title + ' - ' + apiUrl);
-      }, 5000);
+      const options = GitLab.baseOptionsHttpReq();
 
-      return issue;
+      options.method = 'GET';
+
+      const response = await nodeFetch(apiUrl, options);
+      const res = await response.json();
+
+      if (response.ok) {
+        logger.debug(`response data: ${JSON.stringify(res)}`);
+        const issues = res;
+
+        const [issue] = issues.filter(item => item.title === title); // since only one is expected, use the first one
+
+        return issue;
+      }
+
+      logger.error(`openIssue response: ${JSON.stringify(res)}`);
     } catch (error) {
       logger.error(`🤖 Could not find GitLab issue "${title}": ${error}`);
     }
   }
 
   async addCommentToIssue({ issue, comment }) {
-    const axios = require('axios');
-    const body = {
-      body: comment,
+    const body = { body: comment };
+
+    const options = GitLab.baseOptionsHttpReq();
+
+    options.method = 'POST';
+    options.body = JSON.stringify(body);
+    options.headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
     };
 
     try {
-      const response = await axios.post(
-        `${gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}/notes`,
-        body,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OTA_ENGINE_GITLAB_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-        },
+      const response = await nodeFetch(
+        `${this.gitlabUrl}/projects/${this.projectId}/issues/${issue.iid}/notes`,
+        options,
       );
-      logger.info(
-        `🤖 Added comment to GitLab issue #${issue.iid} ${issue.title}: ${response.data.id}`,
-      );
+      const res = await response.json();
 
-      return response.data.body;
+      if (response.ok) {
+        logger.info(`🤖 Added comment to GitLab issue #${issue.iid} ${issue.title}: ${res.id}`);
+
+        return res.body;
+      }
+
+      logger.error(`openIssue response: ${JSON.stringify(res)}`);
     } catch (error) {
-      logger.error(
-        `🤖 Could not add comment to GitLab issue #${issue.iid} "${issue.title}": ${error}`,
-      );
+      logger.error(`🤖 Could not add comment to GitLab issue #${issue.iid} "${issue.title}": ${error}`);
     }
   }
 
   async closeIssueWithCommentIfExists({ title, comment }) {
-    const openedIssue = await this.getIssue({
+    const issue = await this.getIssue({
       title,
       state: GitLab.ISSUE_STATE_OPEN,
     });
 
-    if (!openedIssue) {
+    // if issue does not exist in the "opened" state
+    if (!issue) {
       return;
     }
 
-    await this.addCommentToIssue({ issue: openedIssue, comment });
+    await this.addCommentToIssue({ issue, comment });
 
-    return this.closeIssue(openedIssue);
+    return this.closeIssue(issue);
   }
 
   async createOrUpdateIssue({ title, description, label }) {
@@ -301,10 +326,9 @@ export default class GitLab {
       await this.openIssue(issue);
     }
 
-    const managedLabelsNames = this.MANAGED_LABELS.map((label) => label.name);
-    const [managedLabel] = issue.labels.filter((label) =>
-      managedLabelsNames.includes(label.name),
-    ); // it is assumed that only one specific reason for failure is possible at a time, making managed labels mutually exclusive
+    const managedLabelsNames = this.MANAGED_LABELS.map(label => label.name);
+    const [managedLabel] = issue.labels.filter(label =>
+      managedLabelsNames.includes(label.name)); // it is assumed that only one specific reason for failure is possible at a time, making managed labels mutually exclusive
 
     if (managedLabel?.name == label) {
       // if the label is already assigned to the issue, the error is redundant with the one already reported and no further action is necessary
@@ -312,13 +336,27 @@ export default class GitLab {
     }
 
     const labelsNotManagedToKeep = issue.labels
-      .map((label) => label.name)
-      .filter((label) => !managedLabelsNames.includes(label));
+      .map(label => label.name)
+      .filter(label => !managedLabelsNames.includes(label));
 
     await this.setIssueLabels({
       issue,
-      labels: [label, ...labelsNotManagedToKeep],
+      labels: [ label, ...labelsNotManagedToKeep ],
     });
     await this.addCommentToIssue({ issue, comment: description });
+  }
+
+  static baseOptionsHttpReq(token = process.env.OTA_ENGINE_GITLAB_TOKEN) {
+    const options = {};
+
+    if (process.env.HTTPS_PROXY) {
+      options.agent = new HttpsProxyAgent(process.env.HTTPS_PROXY);
+    } else if (process.env.HTTP_PROXY) {
+      options.agent = new HttpProxyAgent(process.env.HTTP_PROXY);
+    }
+
+    options.headers = { Authorization: `Bearer ${token}` };
+
+    return options;
   }
 }

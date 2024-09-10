@@ -100,8 +100,7 @@
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.0",
     "winston": "^3.3.3",
-    "winston-mail": "^2.0.0",
-    "axios": "^1.7.2"
+    "winston-mail": "^2.0.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.0.3",
